@@ -1,25 +1,22 @@
-# Patrouille des Glaciers - Visualisation
+# Patrouille des Glaciers — Live Tracker
 
-Interface web pour visualiser la course PDG Z2 avec carte interactive et profil d'altitude.
+An interactive web app to visualize team positions during the [Patrouille des Glaciers](https://www.pdg.ch/) race, with a live map and elevation profile.
 
-## Structure des fichiers
+![Screenshot placeholder](https://placehold.co/800x400?text=PDG+Live+Tracker)
 
-```
-/
-├── index.html          # Page principale
-├── styles.css          # Styles
-├── app.js              # Logique JavaScript
-├── data/
-│   ├── teams.json      # Informations des équipes
-│   └── positions.json.gz # Positions compressées
-└── README.md
-```
+## Features
 
-## Préparation des données
+- **Interactive map** — team markers updated over time, colored by start wave
+- **Timeline playback** — play/pause, step forward/back, adjustable speed (1×–20×)
+- **Elevation profile** — race route altitude chart with current position indicator
+- **Filtering** — search by team name or bib number, filter by race or start time
+- **No server required** — pure static files, deployable on GitHub Pages
 
-### 1. Fichier teams.json
+## Data format
 
-Format attendu (tableau d'objets) :
+The app reads two JSON files from the `data/` folder:
+
+**`data/teams.json`** — array of team objects:
 ```json
 [
   {
@@ -29,28 +26,11 @@ Format attendu (tableau d'objets) :
     "rank": 12,
     "category_key": "Z2-P1",
     "start_time": "20:45"
-  },
-  ...
+  }
 ]
 ```
 
-Générer depuis votre DataFrame Python :
-```python
-teams_for_web = teams_df[[
-    'id', 'bib', 'name', 'rank', 'category_key'
-]].copy()
-
-# Extraire l'heure de départ au format HH:MM
-teams_for_web['start_time'] = teams_df['start'].apply(
-    lambda x: pd.to_datetime(x).strftime('%H:%M') if pd.notna(x) else '20:00'
-)
-
-teams_for_web.to_json('data/teams.json', orient='records')
-```
-
-### 2. Fichier positions.json.gz
-
-Format attendu (tableau d'objets) :
+**`data/positions.json.gz`** — gzip-compressed array of position records:
 ```json
 [
   {
@@ -59,130 +39,52 @@ Format attendu (tableau d'objets) :
     "team_id": 9704,
     "latitude": 46.06164398,
     "longitude": 7.386751667
-  },
-  ...
+  }
 ]
 ```
 
-Générer et compresser depuis Python :
-```python
-import gzip
-import json
-
-# Préparer les positions
-positions_for_web = positions_df.to_dict('records')
-
-# Compresser
-with gzip.open('data/positions.json.gz', 'wt', encoding='utf-8') as f:
-    json.dump(positions_for_web, f)
-```
-
-### 3. Profil d'altitude (optionnel)
-
-Pour remplacer le profil d'exemple, modifiez dans `app.js` :
-
-```javascript
-state.elevationPoints = [
-  {distance: 0, elevation: 1500},    // km, mètres
-  {distance: 5, elevation: 1800},
-  {distance: 10, elevation: 2200},
-  // ... vos points réels
-];
-```
+A helper script [`export_web.py`](export_web.py) is included to generate these files from a pandas DataFrame.
 
 ## Configuration
 
-Dans `app.js`, ajustez si nécessaire :
+Edit the `CONFIG` object at the top of [`app.js`](app.js) to match your race:
 
 ```javascript
 const CONFIG = {
     startTime: new Date('2026-04-17T22:00:00+02:00'),
-    endTime: new Date('2026-04-18T16:30:00+02:00'),
-    dataInterval: 2, // minutes entre chaque point
-    mapCenter: [46.05, 7.40], // Centre de la carte
+    endTime:   new Date('2026-04-18T16:30:00+02:00'),
+    dataInterval: 2,           // minutes between GPS points
+    mapCenter: [46.05, 7.40],
     mapZoom: 11,
-    
-    // Couleurs par heure de départ
     startTimeColors: {
-        '2000': '#ef4444',  // 20:00
-        '2045': '#f59e0b',  // 20:45
-        // ... ajoutez vos heures
+        '2000': '#ef4444',     // wave 20:00
+        '2045': '#f59e0b',     // wave 20:45
     }
 };
 ```
 
-## Déploiement sur GitHub Pages
+## Deployment
 
-1. Créer un nouveau repository sur GitHub
-2. Pousser les fichiers :
-```bash
-git init
-git add .
-git commit -m "Initial commit"
-git branch -M main
-git remote add origin https://github.com/VOTRE_USERNAME/pdg-visualization.git
-git push -u origin main
-```
+The app is fully static — just serve the files. The easiest option is GitHub Pages:
 
-3. Activer GitHub Pages :
-   - Settings → Pages
-   - Source: Deploy from a branch
-   - Branch: main / (root)
-   - Save
+1. Push the repository to GitHub.
+2. Go to **Settings → Pages**, set source to `main / (root)`, and save.
+3. Your tracker will be live at `https://<username>.github.io/<repo>/`.
 
-4. Votre site sera disponible à :
-   `https://VOTRE_USERNAME.github.io/pdg-visualization/`
+## Dependencies
 
-## Utilisation
+Loaded via CDN — no install needed:
 
-- **Slider temporel** : Naviguer dans le temps manuellement
-- **Play/Pause** : Lecture automatique
-- **Vitesse** : Ajuster la vitesse de lecture (1x à 60x)
-- **Recherche** : Filtrer par nom d'équipe ou numéro de dossard
-- **Heures de départ** : Cocher/décocher pour afficher/masquer les groupes
-- **Liste équipes** : Cocher/décocher individuellement chaque équipe
-- **Carte** : Cliquer sur un marqueur pour voir les détails
+| Library | Version | Purpose |
+|---------|---------|---------|
+| [Leaflet](https://leafletjs.com/) | 1.9.4 | Interactive map |
+| [Pako](https://nodeca.github.io/pako/) | 2.1.0 | Gzip decompression |
+| [Plotly.js](https://plotly.com/javascript/) | 2.27.0 | Elevation profile chart |
 
-## Personnalisation
+## Browser support
 
-### Couleurs
-Modifiez les variables CSS dans `styles.css` :
-```css
-:root {
-    --color-primary: #dc2626;
-    --color-accent: #2563eb;
-    /* ... */
-}
-```
+Chrome/Edge 90+, Firefox 88+, Safari 14+
 
-### Formes des marqueurs
-Ajoutez des formes dans `app.js` :
-```javascript
-categoryShapes: {
-    'P1': 'circle',
-    'P2': 'square',
-    // ... ajoutez vos catégories
-}
-```
+## License
 
-## Dépendances
-
-Toutes chargées via CDN (aucune installation nécessaire) :
-- Leaflet 1.9.4 (carte)
-- Pako 2.1.0 (décompression gzip)
-
-## Support navigateurs
-
-- Chrome/Edge 90+
-- Firefox 88+
-- Safari 14+
-
-## Performance
-
-- 100 Mo de positions → ~20-30 Mo compressé
-- Chargement initial : 5-10 secondes
-- Rendu : 60 FPS pour <500 marqueurs simultanés
-
-## Licence
-
-À définir selon vos besoins.
+MIT
