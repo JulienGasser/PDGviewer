@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Patrouille des Glaciers - Visualisation</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Panneau latéral gauche -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h1>Patrouille des Glaciers 2026</h1>
+                <div class="race-stats">
+                    <span class="stat-item" id="active-teams">0 équipes</span>
+                </div>
+            </div>
+
+            <!-- Filtres par course -->
+            <div class="filter-section">
+                <h3>Courses</h3>
+                <div class="race-filters" id="race-filters">
+                    <!-- Généré dynamiquement -->
+                </div>
+            </div>
+
+            <!-- Filtres par heure de départ -->
+            <div class="filter-section">
+                <h3>Heures de départ</h3>
+                <div class="start-time-filters" id="start-time-filters">
+                    <!-- Généré dynamiquement -->
+                </div>
+            </div>
+
+            <!-- Recherche -->
+            <div class="filter-section">
+                <input 
+                    type="text" 
+                    id="team-search" 
+                    placeholder="Rechercher par nom ou dossard..."
+                    autocomplete="off"
+                >
+            </div>
+
+            <!-- Liste des équipes -->
+            <div class="teams-list" id="teams-list">
+                <!-- Généré dynamiquement -->
+            </div>
+        </aside>
+
+        <!-- Zone principale -->
+        <main class="main-content">
+            <!-- Contrôles temporels flottants -->
+            <div class="timeline-controls-floating">
+                <div class="timeline-row-1">
+                    <div class="time-display" id="time-display">22:00</div>
+                    
+                    <div class="playback-buttons">
+                        <button id="step-back" class="control-btn-small" title="Reculer de 2 minutes">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z"/>
+                            </svg>
+                        </button>
+                        
+                        <button id="play-pause" class="control-btn">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M8 5v14l11-7z"/>
+                            </svg>
+                        </button>
+                        
+                        <button id="step-forward" class="control-btn-small" title="Avancer de 2 minutes">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z"/>
+                            </svg>
+                        </button>
+                    </div>
+                    
+                    <div class="speed-selector">
+                        <select id="playback-speed">
+                            <option value="1">1x</option>
+                            <option value="2" selected>2x</option>
+                            <option value="5">5x</option>
+                            <option value="10">10x</option>
+                            <option value="20">20x</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="timeline-row-2">
+                    <span class="slider-label-left">22:00</span>
+                    <input 
+                        type="range" 
+                        id="time-slider" 
+                        min="0" 
+                        max="100" 
+                        value="0"
+                        step="1"
+                    >
+                    <span class="slider-label-right">16:30</span>
+                </div>
+            </div>
+        
+            <!-- Carte -->
+            <div class="map-container">
+                <div id="map"></div>
+                <div class="map-legend">
+                    <h4>Catégories</h4>
+                    <div class="legend-items" id="legend-categories">
+                        <!-- Généré dynamiquement -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Profil d'altitude -->
+            <div class="elevation-container">
+                <div id="elevation-profile"></div>
+            </div>
+        </main>
+    </div>
+
+    <div id="loading-overlay" class="loading-overlay">
+        <div class="loader">
+            <div class="loader-spinner"></div>
+            <p>Chargement des données...</p>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-gpx@1.7.0/gpx.js"></script>
+    <script src="https://unpkg.com/pako@2.1.0/dist/pako.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
