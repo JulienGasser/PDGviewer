@@ -133,9 +133,9 @@ body {
 }
 
 .start-time-btn.active {
-    background: var(--color-accent);
+    background: var(--wave-color, var(--color-accent));
     color: white;
-    border-color: var(--color-accent);
+    border-color: var(--wave-color, var(--color-accent));
 }
 
 .search-section {
@@ -278,8 +278,8 @@ body {
 
 .team-flag {
     display: inline-block;
-    width: 20px;
-    height: 20px;
+    width: 16px;
+    height: 12px;
     background-image: url('flag.svg');
     background-size: contain;
     background-repeat: no-repeat;
@@ -355,21 +355,7 @@ body {
     border-radius: 8px;
     box-shadow: var(--shadow-lg);
     min-width: 180px;
-}
-
-.map-legend h4 {
-    font-size: 12px;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    margin-bottom: 12px;
-    color: var(--color-text-muted);
-    font-weight: 600;
-}
-
-.legend-items {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
+    z-index: 800;
 }
 
 .legend-item {
@@ -380,13 +366,41 @@ body {
 }
 
 .legend-shape {
-    width: 20px;
-    height: 20px;
-    border: 2px solid #666;
+    width: 16px;
+    height: 16px;
+    background: #374151;
+    flex-shrink: 0;
+}
+
+.legend-grid {
     display: flex;
-    align-items: center;
-    justify-content: center;
-    background: white;
+    gap: 16px;
+}
+
+.legend-col {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.legend-col-title {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--color-text-muted);
+    font-weight: 600;
+    margin-bottom: 2px;
+}
+
+.legend-wave {
+    padding: 2px 7px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 600;
+    color: white;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.45);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
 }
 
 /* ===== ELEVATION PROFILE ===== */
@@ -407,7 +421,7 @@ body {
 .timeline-controls-floating {
     position: absolute;
     top: 20px;
-    left: 50%;
+    left: 55%;
     transform: translateX(-50%);
     z-index: 1000;
     background: white;
@@ -664,6 +678,7 @@ body {
 .marker-triangle {
     display: block;
     clip-path: polygon(50% 0%, 0% 100%, 100% 100%);
+}
 
 .marker-pentagon {
     display: block;

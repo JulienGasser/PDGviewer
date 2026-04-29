@@ -1,706 +1,588 @@
-// Configuration
+// ===== CONFIG =====
+// Time reference: t=0 corresponds to 22:00 (minutes from midnight).
+// All t_start / t_end values in teams.json use this same origin.
+//
+// Expected data formats:
+//   teams.json      → [{id, bib, name, rank, race, category, t_start, t_end, status, time}, ...]
+//   positions_<RACE>.json.gz → {
+//       meta: {interval: 2},
+//       frames: [                         // frames[i] = positions at t = i*interval minutes
+//           [[team_id, lat, lon, dist, elev], ...],
+//           ...
+//       ]
+//   }
+
 const CONFIG = {
-    // Les courses démarrent entre 22h et 6h30, finissent vers 16h30
-    // On balaie sur 24h pour couvrir toutes les courses
-    dataInterval: 2, // minutes
-    mapCenter: [46.020896, 7.480691], // Arolla
+    T0: 22 * 60,        // 22:00 in minutes from midnight
+    T_MAX: 1110/2,        // 22:00 → 16:30+1day = 18.5h = 1110 min
+    dataInterval: 2,    // minutes between frames
+
+    mapCenter: [46.020896, 7.480691],
     mapZoom: 12,
-    
-    // Catégories avec formes de marqueurs
-    categoryShapes: {
-        'P1': 'circle',
-        'P2': 'square',
-        'P3': 'diamond',
-        'P4': 'triangle',
-        'P5': 'pentagon'
-    },
-    
-    // Heures de départ par type de course
-    startTimesA: ['03:30', '04:00', '04:30', '05:00', '06:00', '06:30'],
-    startTimesZ: ['22:00', '22:45', '23:30', '00:15', '01:00', '02:00', '03:00']
+
+    //categoryShapes: { 'P1': 'circle', 'P2': 'square', 'P3': 'diamond', 'P4': 'triangle', 'P5': 'pentagon' },
+    raceShapes:     { 'A1': 'circle', 'A2': 'square', 'Z1': 'diamond', 'Z2': 'triangle' },
+
+    // Colors keyed by t_start (integer minutes from T0=22:00)
+    startTimeColors: {
+        0:   '#02d8fd',  // 22:00
+        45:  '#f71212',  // 22:45
+        90:  '#f59e0b',  // 23:30
+        135: '#0fd420',  // 00:15
+        180: '#0452ce',  // 01:00
+        240: '#6e33f7',  // 02:00
+        300: '#FF1D8D',  // 03:00
+        330: '#02d8fd',  // 03:30
+        360: '#f71212',  // 04:00
+        390: '#f59e0b',  // 04:30
+        420: '#0fd420',  // 05:00
+        480: '#0452ce',  // 06:00
+        510: '#6e33f7',  // 06:30
+    }
 };
 
-// État global
+// Convert t (minutes from T0) to "HH:MM" display string, handling midnight crossing
+function tToDisplay(t) {
+    const totalMin = (CONFIG.T0 + t) % 1440;
+    return `${String(Math.floor(totalMin / 60)).padStart(2, '0')}:${String(totalMin % 60).padStart(2, '0')}`;
+}
+
+// ===== STATE =====
 const state = {
     teams: [],
-    positions: [],
+    teamsMap:   new Map(),  // id → team object (built once after load)
+    teamDomMap: new Map(),  // id → DOM element (built once)
+
+    frames:      {},        // race → frames array
+    raceMeta:    {},        // race → {interval}
+    loadedRaces: new Set(),
+
     elevationProfile: [],
     gpxTrace: null,
-    
-    selectedRaces: new Set(['Z2']),
+
+    selectedRaces:      new Set(['Z2']),
     selectedStartTimes: new Set(),
-    favoriteTeams: new Set(),
-    
-    currentTimeIndex: 0,
-    isPlaying: false,
+    favoriteTeams:      new Set(),
+
+    currentT:      0,       // current time in minutes from T0
+    isPlaying:     false,
     playbackSpeed: 2,
-    
-    markers: new Map(),
+
+    canvasLayer:      null,
+    map:              null,
     elevationMarkers: [],
-    traceLayer: null,
-    
-    map: null,
-    elevationCanvas: null,
-    
-    // Plage horaire pour le slider (22:00 à 16:30 le lendemain)
-    minTime: '22:00',
-    maxTime: '16:30'
 };
 
-// Initialisation
+// ===== CANVAS MARKERS LAYER =====
+// Draws all team markers on a single canvas — much faster than individual Leaflet markers.
+const CanvasMarkersLayer = L.Layer.extend({
+    initialize() { this._data = []; },
+
+    onAdd(map) {
+        this._map = map;
+        const canvas = document.createElement('canvas');
+        canvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;z-index:450';
+        this._canvas = canvas;
+        this._ctx = canvas.getContext('2d');
+        map.getContainer().appendChild(canvas);
+        this._resize();
+        this._onMove   = () => this._redraw();
+        this._onResize = () => { this._resize(); this._redraw(); };
+        map.on('move zoom viewreset', this._onMove);
+        map.on('zoomend moveend resize', this._onResize);
+    },
+
+    onRemove(map) {
+        map.getContainer().removeChild(this._canvas);
+        map.off('move zoom viewreset', this._onMove);
+        map.off('zoomend moveend resize', this._onResize);
+    },
+
+    _resize() {
+        const c = this._map.getContainer();
+        this._canvas.width  = c.clientWidth;
+        this._canvas.height = c.clientHeight;
+    },
+
+    update(data) {
+        this._data = data || [];
+        this._redraw();
+    },
+
+    _redraw() {
+        const ctx = this._ctx;
+        ctx.clearRect(0, 0, this._canvas.width, this._canvas.height);
+        // Draw normals first, favorites on top
+        const favs = [];
+        for (const d of this._data) {
+            if (d.isFavorite) { favs.push(d); continue; }
+            this._drawMarker(ctx, d);
+        }
+        for (const d of favs) this._drawMarker(ctx, d);
+    },
+
+    _drawMarker(ctx, d) {
+        const p = this._map.latLngToContainerPoint([d.lat, d.lon]);
+        const x = p.x, y = p.y, r = 6;
+
+        ctx.fillStyle   = d.color;
+        ctx.strokeStyle = d.isFavorite ? '#fbbf24' : 'rgba(0,0,0,0.8)';
+        ctx.lineWidth   = d.isFavorite ? 2.5 : 1;
+        const sh = d.isFavorite ? 'star' : d.shape;
+        ctx.beginPath();
+
+        switch (sh) {
+            case 'circle':
+                ctx.arc(x, y, 6, 0, Math.PI * 2);
+                break;
+            case 'square':
+                ctx.rect(x - 6, y - 6, 12, 12);
+                break;
+            case 'diamond':
+                ctx.moveTo(x, y - 6); ctx.lineTo(x + 6, y);
+                ctx.lineTo(x, y + 6); ctx.lineTo(x - 6, y);
+                ctx.closePath();
+                break;
+            case 'star':
+                ctx.moveTo(x,       y - 13);
+                ctx.lineTo(x + 2.94, y - 4.05);
+                ctx.lineTo(x + 12.36, y - 4.02);
+                ctx.lineTo(x + 4.76, y + 1.55);
+                ctx.lineTo(x + 7.64, y + 10.52);
+                ctx.lineTo(x,        y + 5);
+                ctx.lineTo(x - 7.64, y + 10.52);
+                ctx.lineTo(x - 4.76, y + 1.55);
+                ctx.lineTo(x - 12.36, y - 4.02);
+                ctx.lineTo(x - 2.94, y - 4.05);
+                ctx.closePath();
+                break;
+            case 'triangle':
+            default:
+                ctx.moveTo(x, y - 6);
+                ctx.lineTo(x + 6, y + 6);
+                ctx.lineTo(x - 6, y + 6);
+                ctx.closePath();
+        }
+        ctx.fill();
+        ctx.stroke();
+    }
+});
+
+// ===== INIT =====
 async function init() {
     try {
         showLoading(true);
-        
-        // Charger les données
         await loadData();
-        
-        // Initialiser la carte
         initMap();
-        
-        // Initialiser le profil d'altitude
-        //initElevationProfile();
-        
-        // Construire l'interface
         buildRaceFilters();
         buildStartTimeFilters();
         buildTeamsList();
         buildCategoryLegend();
-        
-        // Attacher les événements
         attachEventListeners();
-        
-        // Première mise à jour
-        updateVisualization();  // contruit le profil d'altitude
-        
+        updateVisualization();
         showLoading(false);
-    } catch (error) {
-        console.error('Erreur d\'initialisation:', error);
-        alert('Erreur lors du chargement des données: ' + error.message);
+    } catch (err) {
+        console.error('Erreur initialisation:', err);
+        alert('Erreur lors du chargement: ' + err.message);
     }
 }
 
-// Chargement des données
+// ===== DATA LOADING =====
 async function loadData() {
-    // Charger teams.json
-    const teamsResponse = await fetch('data/teamsPDG.json');
-    state.teams = await teamsResponse.json();
-    
-    // Charger positions.json.gz
-    const positionsResponse = await fetch('data/positionsPDG.json.gz');
-    const compressedData = await positionsResponse.arrayBuffer();
-    const decompressedData = pako.inflate(compressedData, { to: 'string' });
-    state.positions = JSON.parse(decompressedData);
-    
-    // Charger le profil d'altitude
-    const elevationResponse = await fetch('data/profil_traceZ.json');
-    state.elevationProfile = await elevationResponse.json();
-    
-    // Charger la trace GPX
-    const gpxResponse = await fetch('data/traceZ.gpx');
-    const gpxText = await gpxResponse.text();
-    state.gpxTrace = gpxText;
-    
-    // Initialiser toutes les heures de départ comme sélectionnées
-    state.teams.forEach(team => {
-        state.selectedStartTimes.add(team.start_time);
-    });
-    
-    // Charger les favoris depuis localStorage
-    const savedFavorites = localStorage.getItem('pdg_favorites');
-    if (savedFavorites) {
-        state.favoriteTeams = new Set(JSON.parse(savedFavorites));
-    }
-    
-    console.log(`Chargé: ${state.teams.length} équipes, ${state.positions.length} positions`);
-    console.log(`Profil: ${state.elevationProfile.length} points`);
+    const [teamsResp, elevResp, gpxResp] = await Promise.all([
+        fetch('data/teamsPDG.json'),
+        fetch('data/profil_traceZ.json'),
+        fetch('data/traceZ.gpx'),
+    ]);
+
+    state.teams         = await teamsResp.json();
+    state.teamsMap      = new Map(state.teams.map(t => [t.id, t]));
+    state.elevationProfile = await elevResp.json();
+    state.gpxTrace      = await gpxResp.text();
+
+    // All start times selected by default
+    state.teams.forEach(t => state.selectedStartTimes.add(t.t_start));
+
+    const saved = localStorage.getItem('pdg_favorites');
+    if (saved) state.favoriteTeams = new Set(JSON.parse(saved));
+
+    await loadRacePositions([...state.selectedRaces]);
+    console.log(`Chargé: ${state.teams.length} équipes`);
 }
 
-// Initialisation de la carte Leaflet
+async function loadRacePositions(races) {
+    const toLoad = races.filter(r => !state.loadedRaces.has(r));
+    if (!toLoad.length) return;
+    showLoading(true);
+    await Promise.all(toLoad.map(async race => {
+        try {
+            const resp = await fetch(`data/positions${race}.json.gz`);
+            const buf  = await resp.arrayBuffer();
+            const parsed = JSON.parse(pako.inflate(buf, { to: 'string' }));
+            state.frames[race]   = parsed.frames;
+            state.raceMeta[race] = parsed.meta;
+            state.loadedRaces.add(race);
+            console.log(`Positions ${race}: ${parsed.frames.length} frames`);
+        } catch (e) {
+            console.warn(`positions${race}.json.gz introuvable:`, e);
+        }
+    }));
+    showLoading(false);
+}
+
+// ===== MAP =====
 function initMap() {
     state.map = L.map('map').setView(CONFIG.mapCenter, CONFIG.mapZoom);
-    
-    // Couche de base Swiss Topo
+
     L.tileLayer('https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.pixelkarte-farbe/default/current/3857/{z}/{x}/{y}.jpeg', {
-        attribution: '© swisstopo',
-        maxZoom: 18
+        attribution: '© swisstopo', maxZoom: 18
     }).addTo(state.map);
-    
-    // Charger et afficher la trace GPX
+
     if (state.gpxTrace) {
         new L.GPX(state.gpxTrace, {
             async: true,
-            marker_options: {
-                startIconUrl: null,
-                endIconUrl: null,
-                shadowUrl: null
-            },
-            polyline_options: {
-                color: '#dc2626',
-                weight: 4,
-                opacity: 0.8
-            }
-        }).on('loaded', function(e) {
-            // Optionnel : ajuster la vue sur la trace
-            // state.map.fitBounds(e.target.getBounds());
+            marker_options: { startIconUrl: null, endIconUrl: null, shadowUrl: null },
+            polyline_options: { color: '#dc2626', weight: 4, opacity: 0.8 }
         }).addTo(state.map);
     }
+
+    state.canvasLayer = new CanvasMarkersLayer();
+    state.canvasLayer.addTo(state.map);
 }
 
-// Met à jour ou initialise le profil d'altitude avec les marqueurs
+// ===== ELEVATION PROFILE =====
 function updateElevationProfile() {
-    const containerId = 'elevation-profile';
     const profileData = state.elevationProfile;
+    if (!profileData.length) return;
 
-    if (profileData.length === 0) return;
+    const raceSymbols = { 'A1': 'circle', 'A2': 'square', 'Z1': 'diamond', 'Z2': 'triangle-up' };
 
-    // 1. Préparation de la trace Profil (SVG pour le dégradé)
     const traceProfile = {
         x: profileData.map(p => p.dist),
         y: profileData.map(p => p.alt),
-        type: 'scatter', // Indispensable pour le fill gradient
-        mode: 'lines',
-        fill: 'tozeroy',
-        fillcolor: 'url(#elevationGradient)', // Référence au gradient SVG
-        line: {
-            color: 'rgb(220, 38, 38)',
-            width: 2,
-            shape: 'spline'
-        },
+        type: 'scatter', mode: 'lines', fill: 'tozeroy',
+        fillcolor: 'url(#elevationGradient)',
+        line: { color: 'rgb(220,38,38)', width: 2, shape: 'spline' },
         hoverinfo: 'skip'
     };
 
-    // 2. Préparation des marqueurs (WebGL pour la fluidité)
-    const raceSymbols = { 'A1': 'circle', 'A2': 'square', 'Z1': 'diamond', 'Z2': 'triangle-up' };
-    
-    const favorites = state.elevationMarkers.filter(d => d.isFavorite);
-    const byRace = ['A1', 'A2', 'Z1', 'Z2'].reduce((acc, race) => {
-        acc[race] = state.elevationMarkers.filter(d => !d.isFavorite && d.race === race);
-        return acc;
-    }, {});
+    const byRace = {};
+    const favs   = [];
+    for (const d of state.elevationMarkers) {
+        if (d.isFavorite) { favs.push(d); continue; }
+        if (!byRace[d.race]) byRace[d.race] = [];
+        byRace[d.race].push(d);
+    }
 
-    const markerTraces = Object.entries(byRace)
-        .filter(([_, data]) => data.length > 0)
-        .map(([race, data]) => ({
-            x: data.map(d => d.dist + (race[0]=='A'? 28.39 : 0)),
-            y: data.map(d => d.elev),
-            type: 'scattergl',
-            mode: 'markers',
-            marker: {
-                size: 10,
-                color: data.map(d => d.color),
-                symbol: raceSymbols[race] || 'circle',
-                line: {color: 'black', width: 1}
-            },
-            hoverinfo: 'skip',
-            showlegend: false
-        }));
+    const markerTraces = Object.entries(byRace).map(([race, data]) => ({
+        x: data.map(d => d.dist),
+        y: data.map(d => d.elev),
+        type: 'scattergl', mode: 'markers',
+        marker: { size: 10, color: data.map(d => d.color), symbol: raceSymbols[race] || 'circle', line: { color: 'black', width: 1 } },
+        hoverinfo: 'skip', showlegend: false
+    }));
 
-    if (favorites.length > 0) {
+    if (favs.length) {
         markerTraces.push({
-            x: favorites.map(d => d.dist + (d.race[0]=='A'? 28.39 : 0)),
-            y: favorites.map(d => d.elev),
-            type: 'scattergl',
-            mode: 'markers',
+            x: favs.map(d => d.dist), y: favs.map(d => d.elev),
+            type: 'scattergl', mode: 'markers',
             marker: { size: 14, color: '#fbbf24', symbol: 'star' },
-            hoverinfo: 'skip',
-            showlegend: false
+            hoverinfo: 'skip', showlegend: false
         });
     }
 
-    // 3. Configuration du Layout
     const layout = {
-        xaxis: {
-            title: { text: 'Distance (km)' },
-            range: [0, 57],
-            nticks: 8,
-            showgrid: true,
-            gridcolor: '#e5e7eb',
-            zeroline: false,
-            automargin: true
-        },
-        yaxis: {
-            title: { text: 'Altitude (m)' },
-            range: [1000, 4000],
-            dtick: 500,
-            tickmode: 'linear',
-            showgrid: true,
-            gridcolor: '#e5e7eb',
-            zeroline: false,
-            automargin: true
-        },
+        xaxis: { title: { text: 'Distance (km)' }, range: [0, 57], nticks: 8, showgrid: true, gridcolor: '#e5e7eb', zeroline: false, automargin: true },
+        yaxis: { title: { text: 'Altitude (m)' }, range: [1000, 4000], dtick: 500, tickmode: 'linear', showgrid: true, gridcolor: '#e5e7eb', zeroline: false, automargin: true },
         margin: { t: 10, r: 30, l: 50, b: 40, pad: 0 },
-        autosize: true,
-        hovermode: 'closest',
-        showlegend: false,
-        paper_bgcolor: 'white',
-        plot_bgcolor: 'white'
+        autosize: true, hovermode: 'closest', showlegend: false,
+        paper_bgcolor: 'white', plot_bgcolor: 'white'
     };
 
-    const config = {
-        responsive: true,
-        displayModeBar: false
-    };
-
-    // 4. Rendu avec React (plus performant)
-    Plotly.react(containerId, [traceProfile, ...markerTraces], layout, config);
-
-    // 5. Injection du Gradient (Après le rendu)
-    ensureElevationGradient(containerId);
+    Plotly.react('elevation-profile', [traceProfile, ...markerTraces], layout, { responsive: true, displayModeBar: false });
+    ensureElevationGradient('elevation-profile');
 }
 
-/**
- * Injecte le gradient dans le SVG de Plotly s'il n'existe pas
- */
-function ensureElevationGradient(containerId) {
-    const plotDiv = document.getElementById(containerId);
-    // Plotly utilise plusieurs SVG. On injecte dans tous les SVG 'main-svg' pour être sûr.
-    const svgs = plotDiv.querySelectorAll('svg.main-svg');
-    
-    svgs.forEach(svg => {
+function ensureElevationGradient(id) {
+    document.getElementById(id).querySelectorAll('svg.main-svg').forEach(svg => {
         if (!svg.querySelector('#elevationGradient')) {
-            const gradientSVG = `
-            <defs>
-              <linearGradient id="elevationGradient" x1="0" x2="0" y1="0" y2="1">
-                <stop offset="0%" stop-color="rgb(220, 38, 38)" stop-opacity="0.5"/>
-                <stop offset="100%" stop-color="rgb(220, 38, 38)" stop-opacity="0"/>
-              </linearGradient>
-            </defs>`;
-            svg.insertAdjacentHTML('afterbegin', gradientSVG);
+            svg.insertAdjacentHTML('afterbegin', `<defs><linearGradient id="elevationGradient" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="rgb(220,38,38)" stop-opacity="0.5"/><stop offset="100%" stop-color="rgb(220,38,38)" stop-opacity="0"/></linearGradient></defs>`);
         }
     });
 }
 
-// Construction des filtres de course
+// ===== FILTERS =====
 function buildRaceFilters() {
     const container = document.getElementById('race-filters');
-    const races = ['A1', 'A2', 'Z1', 'Z2'];
-    
-    races.forEach(race => {
+    ['A1', 'A2', 'Z1', 'Z2'].forEach(race => {
         const btn = document.createElement('button');
         btn.className = `race-filter-btn ${state.selectedRaces.has(race) ? 'active' : ''}`;
         btn.textContent = race;
-        btn.dataset.race = race;
-        
-        btn.addEventListener('click', () => {
+        btn.addEventListener('click', async () => {
             if (state.selectedRaces.has(race)) {
                 state.selectedRaces.delete(race);
                 btn.classList.remove('active');
             } else {
                 state.selectedRaces.add(race);
                 btn.classList.add('active');
+                await loadRacePositions([race]);
             }
             updateStartTimeFilters();
             filterTeams();
         });
-        
-        
         container.appendChild(btn);
     });
 }
 
-// Construction des filtres d'heure de départ
 function buildStartTimeFilters() {
     const container = document.getElementById('start-time-filters');
     container.innerHTML = '';
-    
-    // Déterminer quelles heures afficher en fonction des courses sélectionnées
-    let timesToShow = [];
-    
-    if (state.selectedRaces.has('A1') || state.selectedRaces.has('A2')) {
-        timesToShow = CONFIG.startTimesA;
-    }
-    if (state.selectedRaces.has('Z1') || state.selectedRaces.has('Z2')) {
-        timesToShow = [...timesToShow, ...CONFIG.startTimesZ];
-    }
-    
-    timesToShow.forEach(time => {
+
+    // Derive start times from the actual teams in currently selected races
+    const times = new Set();
+    state.teams.forEach(t => { if (state.selectedRaces.has(t.race)) times.add(t.t_start); });
+
+    [...times].sort((a, b) => a - b).forEach(t => {
+        const color = CONFIG.startTimeColors[t] || '#2563eb';
         const btn = document.createElement('button');
-        btn.className = 'start-time-btn ' + (state.selectedStartTimes.has(time)? 'active':'');
-        btn.textContent = time;
-        btn.dataset.time = time;
-        
+        btn.className = `start-time-btn ${state.selectedStartTimes.has(t) ? 'active' : ''}`;
+        btn.textContent = tToDisplay(t);
+        btn.style.setProperty('--wave-color', color); 
         btn.addEventListener('click', () => {
-            if (state.selectedStartTimes.has(time)) {
-                state.selectedStartTimes.delete(time);
-                btn.classList.remove('active');
-            } else {
-                state.selectedStartTimes.add(time);
-                btn.classList.add('active');
-            }
+            state.selectedStartTimes[state.selectedStartTimes.has(t) ? 'delete' : 'add'](t);
+            btn.classList.toggle('active', state.selectedStartTimes.has(t));
             filterTeams();
         });
-        
         container.appendChild(btn);
     });
 }
 
-function updateStartTimeFilters() {
-    buildStartTimeFilters();
-}
+function updateStartTimeFilters() { buildStartTimeFilters(); }
 
-// Construction de la liste des équipes
+// ===== TEAMS LIST =====
 function buildTeamsList() {
     const container = document.getElementById('teams-list');
     container.innerHTML = '';
-    
-    // Trier : rank 0 à la fin, les autres par ordre croissant
-    const sortedTeams = [...state.teams].sort((a, b) => {
-        const rankA = a.rank === 0 ? 999999 : a.rank;
-        const rankB = b.rank === 0 ? 999999 : b.rank;
-        return rankA - rankB;
+    state.teamDomMap.clear();
+
+    const sorted = [...state.teams].sort((a, b) => {
+        const ra = a.rank === 0 ? 999999 : a.rank;
+        const rb = b.rank === 0 ? 999999 : b.rank;
+        return ra - rb;
     });
-    
-    sortedTeams.forEach(team => {
+
+    const fragment = document.createDocumentFragment();
+    sorted.forEach(team => {
         const bibThousand = Math.floor(parseInt(team.bib) / 1000) * 1000;
-        const bibClass = `bib-${bibThousand}`;
-        
-        const isFavorite = state.favoriteTeams.has(team.id);
-        // Afficher '-' si rank = 0
-        const displayRank = team.rank == 0 ? '-' : team.rank;
-        
         const div = document.createElement('div');
         div.className = 'team-item';
         div.dataset.teamId = team.id;
-        div.dataset.race = team.race;
-        div.dataset.startTime = team.start_time;
+        div.dataset.race   = team.race;
+        div.dataset.tStart = team.t_start;
         div.innerHTML = `
           <div class="team-aside">
-              <div class="team-rank">${displayRank}</div>
+              <div class="team-rank">${team.rank === 0 ? '-' : team.rank}</div>
               <div class="team-race">${team.race}</div>
           </div>
           <div class="team-content">
               <div class="team-identity">
-                  <span class="team-bib ${bibClass}">${team.bib}</span>
+                  <span class="team-bib bib-${bibThousand}">${team.bib}</span>
                   <span class="team-name">${team.name}</span>
               </div>
               <div class="team-details">
                   <span class="team-detail-item team-category">${team.category}</span>
-                  <span class="team-detail-item">🕐 ${team.start_time}</span>
-                  <span class="team-detail-item" data-time-display><span class="team-flag"></span>${team.time || '--:--:--'}</span>
-                  <span class="team-detail-item status status-${team.status.toLowerCase().replace(' ', '-')}">${team.status}</span>
+                  <span class="team-detail-item">🕐 ${tToDisplay(team.t_start)}</span>
+                  <span class="team-detail-item" data-time-display>
+                      <span class="team-flag"></span>
+                      <span data-elapsed>--:--</span>
+                  </span>
+                  <span class="team-detail-item status" data-status-display></span>
               </div>
           </div>
-          <button class="favorite-btn ${isFavorite ? 'active' : ''}" data-team-id="${team.id}">
-              ★
-          </button>
+          <button class="favorite-btn ${state.favoriteTeams.has(team.id) ? 'active' : ''}" data-team-id="${team.id}">★</button>
         `;
-        
-        container.appendChild(div);
-        
-        // Événement favori
-        div.querySelector('.favorite-btn').addEventListener('click', (e) => {
+
+        div.querySelector('.favorite-btn').addEventListener('click', e => {
             e.stopPropagation();
             toggleFavorite(team.id);
         });
+
+        state.teamDomMap.set(team.id, div);
+        fragment.appendChild(div);
     });
-    
+
+    container.appendChild(fragment);
     filterTeams();
 }
 
 function toggleFavorite(teamId) {
-    if (state.favoriteTeams.has(teamId)) {
-        state.favoriteTeams.delete(teamId);
-    } else {
-        state.favoriteTeams.add(teamId);
-    }
-    
-    // Sauvegarder dans localStorage
+    if (state.favoriteTeams.has(teamId)) state.favoriteTeams.delete(teamId);
+    else state.favoriteTeams.add(teamId);
+
     localStorage.setItem('pdg_favorites', JSON.stringify([...state.favoriteTeams]));
-    
-    // Mettre à jour l'affichage
     const btn = document.querySelector(`.favorite-btn[data-team-id="${teamId}"]`);
-    if (btn) {
-        btn.classList.toggle('active');
-    }
-    
-    updateMarkers();
+    if (btn) btn.classList.toggle('active', state.favoriteTeams.has(teamId));
+    updateMarkers(state.currentT);
 }
 
-// Construction de la légende des catégories
 function buildCategoryLegend() {
-    const container = document.getElementById('legend-categories');
-    const categories = Object.keys(CONFIG.categoryShapes);
-    
-    categories.forEach(cat => {
-        const shape = CONFIG.categoryShapes[cat];
-        const div = document.createElement('div');
-        div.className = 'legend-item';
-        div.innerHTML = `
-            <div class="legend-shape marker-${shape}"></div>
-            <span>${cat}</span>
-        `;
-        container.appendChild(div);
-    });
+    // Everything in the HTML
 }
 
-// Filtrage des équipes
+// ===== FILTERING =====
 function filterTeams() {
     const searchTerm = document.getElementById('team-search').value.toLowerCase();
-    
-    document.querySelectorAll('.team-item').forEach(item => {
-        const teamId = parseInt(item.dataset.teamId);
-        const team = state.teams.find(t => t.id === teamId);
-        
-        const matchesSearch = !searchTerm || 
-            team.name.toLowerCase().includes(searchTerm) ||
-            team.bib.includes(searchTerm);
-        
-        const matchesRace = state.selectedRaces.has(team.race);
-        const matchesStartTime = state.selectedStartTimes.has(team.start_time);
-        
-        if (matchesSearch && matchesRace && matchesStartTime) {
-            item.classList.remove('hidden');
-        } else {
-            item.classList.add('hidden');
-        }
+
+    state.teamDomMap.forEach((item, teamId) => {
+        const team = state.teamsMap.get(teamId);
+        const ok = (!searchTerm || team.name.toLowerCase().includes(searchTerm) || team.bib.includes(searchTerm))
+                && state.selectedRaces.has(team.race)
+                && state.selectedStartTimes.has(team.t_start);
+        item.classList.toggle('hidden', !ok);
     });
-    
+
     updateStats();
     updateVisualization();
 }
 
-// Mise à jour des statistiques
 function updateStats() {
-    const visibleCount = document.querySelectorAll('.team-item:not(.hidden)').length;
-    document.getElementById('active-teams').textContent = `${visibleCount} équipes`;
+    const visible = document.querySelectorAll('.team-item:not(.hidden)').length;
+    document.getElementById('active-teams').textContent = `${visible} équipes`;
 }
 
-// Événements
+// ===== EVENT LISTENERS =====
 function attachEventListeners() {
-    // Slider temporel (22:00 à 16:30 = 18.5 heures = 1110 minutes)
     const slider = document.getElementById('time-slider');
-    const totalMinutes = 18.5 * 60; // 1110 minutes
-    const steps = totalMinutes / CONFIG.dataInterval;
-    slider.max = steps;
-    
-    slider.addEventListener('input', (e) => {
-        state.currentTimeIndex = parseInt(e.target.value);
+    slider.max = CONFIG.T_MAX;
+
+    slider.addEventListener('input', e => {
+        state.currentT = parseInt(e.target.value);
         updateVisualization();
     });
-    
-    // Bouton play/pause
+
     document.getElementById('play-pause').addEventListener('click', togglePlayback);
-    
-    // Boutons step
+
     document.getElementById('step-back').addEventListener('click', () => {
-        if (state.currentTimeIndex > 0) {
-            state.currentTimeIndex--;
-            document.getElementById('time-slider').value = state.currentTimeIndex;
-            updateVisualization();
-        }
+        state.currentT = Math.max(0, state.currentT - 1);
+        slider.value = state.currentT;
+        updateVisualization();
     });
 
     document.getElementById('step-forward').addEventListener('click', () => {
-        const slider = document.getElementById('time-slider');
-        const maxIndex = parseInt(slider.max);
-        if (state.currentTimeIndex < maxIndex) {
-            state.currentTimeIndex++;
-            slider.value = state.currentTimeIndex;
-            updateVisualization();
-        }
+        state.currentT = Math.min(CONFIG.T_MAX, state.currentT + 1);
+        slider.value = state.currentT;
+        updateVisualization();
     });
-    
-    // Sélecteur de vitesse
-    document.getElementById('playback-speed').addEventListener('change', (e) => {
+
+    document.getElementById('playback-speed').addEventListener('change', e => {
         state.playbackSpeed = parseFloat(e.target.value);
     });
-    
-    // Recherche (filtre à chaque caractère)
-    document.getElementById('team-search').addEventListener('input', filterTeams);
+
+    let searchTimer;
+    document.getElementById('team-search').addEventListener('input', () => {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(filterTeams, 150);
+    });
 }
 
-// Lecture/pause
+// ===== PLAYBACK =====
 function togglePlayback() {
     state.isPlaying = !state.isPlaying;
-    const btn = document.getElementById('play-pause');
-    btn.classList.toggle('playing', state.isPlaying);
-    
-    if (state.isPlaying) {
-        playbackLoop();
-    }
+    document.getElementById('play-pause').classList.toggle('playing', state.isPlaying);
+    if (state.isPlaying) playbackLoop();
 }
 
 function playbackLoop() {
     if (!state.isPlaying) return;
-    
-    const slider = document.getElementById('time-slider');
-    const maxIndex = parseInt(slider.max);
-    
-    if (state.currentTimeIndex >= maxIndex) {
-        state.currentTimeIndex = maxIndex;
-        togglePlayback()
-    } else {
-        state.currentTimeIndex += state.playbackSpeed;
+    if (state.currentT >= CONFIG.T_MAX) {
+        state.currentT = CONFIG.T_MAX;
+        togglePlayback();
+        return;
     }
-    
-    slider.value = state.currentTimeIndex;
+    state.currentT = Math.min(state.currentT + state.playbackSpeed, CONFIG.T_MAX);
+    document.getElementById('time-slider').value = state.currentT;
     updateVisualization();
-    
     setTimeout(playbackLoop, 1000);
 }
 
-// Mise à jour de la visualisation
+// ===== VISUALIZATION =====
 function updateVisualization() {
-    // Convertir l'index en temps (de 22:00 à 16:30 le lendemain)
-    const minutesFromStart = state.currentTimeIndex * CONFIG.dataInterval;
-    const totalMinutes = 22 * 60 + minutesFromStart; // Commence à 22:00
-    
-    let hours = Math.floor(totalMinutes / 60) % 24;
-    let minutes = totalMinutes % 60;
-    
-    const currentTime = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
-    
-    // Mettre à jour l'affichage du temps
-    document.getElementById('time-display').textContent = currentTime;
-    
-    // Mettre à jour le gradient du slider
+    document.getElementById('time-display').textContent = tToDisplay(state.currentT * CONFIG.dataInterval);
+
     const slider = document.getElementById('time-slider');
-    const percent = (state.currentTimeIndex / parseInt(slider.max)) * 100;
-    slider.style.background = `linear-gradient(to right, var(--color-primary) ${percent}%, #e5e7eb ${percent}%)`;
-    
-    // Mettre à jour les marqueurs
-    updateMarkers(currentTime);
-    
-    // Mettre à jour le statut et les temps des équipes
-    updateTeamStatuses(currentTime);
+    const pct    = (state.currentT / parseInt(slider.max)) * 100;
+    slider.style.background = `linear-gradient(to right, var(--color-primary) ${pct}%, #e5e7eb ${pct}%)`;
+
+    updateMarkers(state.currentT);
+    updateTeamStatuses(state.currentT * CONFIG.dataInterval);
 }
 
-
-function updateTeamStatuses(currentTime) {
-    state.teams.forEach(team => {
-        const teamItem = document.querySelector(`.team-item[data-team-id="${team.id}"]`);
-        if (!teamItem) return;
-        
-        const statusEl = teamItem.querySelector('.status');
-        const timeEl = teamItem.querySelector('[data-time-display]');
-        
-        // Déterminer le statut
-        /*let status = 'not-started';
-        timeEl.textContent = '00:00:00';
-        if (currentTime > '18:00') {
-            if ((currentTime > team.start_time) & (team.start_time < '12:00') {
-                status = 'running';
-                timeEl.textContent = currentTime + ':00';
-            }
-        } else {
-            if (currentTime > team.stop_time) {
-                status = team.status.toLowerCase();
-                timeEl.textContent = team.time;
-            } else if (currentTime > team.start_time) {
-                status = 'running';
-                timeEl.textContent = currentTime + ':00';
-            }
-        }
-        
-        statusEl.className = `team-detail-item status status-${status}`;
-        statusEl.textContent = status.replace('-', ' ').replace(/\b\w/g, l => l.toUpperCase());*/
-        
-        timeEl.textContent = team.time;
-        statusEl.className = `team-detail-item status status-${team.status}`;
-        statusEl.textContent = team.status;
-    });
-}
-
-function updateMarkers(currentTime) {
-    // Filtrer et préparer les données en une seule passe
-    const currentPositions = state.positions.filter(p => p.time === currentTime);
-    
-    // Créer un Map des teams pour lookup O(1)
-    const teamsMap = new Map(state.teams.map(t => [t.id, t]));
-    
-    // Couleurs par heure de départ (déplacer dans CONFIG si réutilisé)
-    const startTimeColors = {
-        '22:00': '#02d8fd', '03:30': '#02d8fd',
-        '22:45': '#f71212', '04:00': '#f71212',
-        '23:30': '#f59e0b', '04:30': '#f59e0b',
-        '00:15': '#0fd420', '05:00': '#0fd420',
-        '01:00': '#0452ce', '06:00': '#0452ce',
-        '02:00': '#6e33f7', '06:30': '#6e33f7',
-        '03:00': '#FF1D8D'
-            };
-    
-    const raceSymbols = {
-        'A1': 'circle',
-        'A2': 'square',
-        'Z1': 'diamond',
-        'Z2': 'triangle'
+function getTeamStatusAtT(team, t) {
+    if (t < team.t_start)
+        return { cssStatus: 'not-started', label: 'Not Started', elapsed: '--:--:--' };
+    if (team.t_end != null && t >= team.t_end)
+        return { cssStatus: team.status, label: team.status, elapsed: team.time }; //TODO
+    const el = t - team.t_start;
+    return {
+        cssStatus: 'Running',
+        label:     'En course',
+        elapsed:   `${String(Math.floor(el / 60)).padStart(2, '0')}:${String(el % 60).padStart(2, '0')}:00`
     };
-    
-    // Préparer les données pour map et elevation en une passe
-    const validPositions = currentPositions
-        .filter(pos => pos.latitude && pos.longitude)
-        .map(pos => {
-            const team = teamsMap.get(pos.team_id);
-            if (!team) return null;
-            
-            const isFavorite = state.favoriteTeams.has(team.id);
-            const isVisible = state.selectedRaces.has(team.race) && 
-                            state.selectedStartTimes.has(team.start_time);
-            
-            if (!isFavorite && !isVisible) return null;
-            
-            return {
-                teamId: pos.team_id,
-                lat: pos.latitude,
-                lon: pos.longitude,
-                dist: pos.dist,
-                elev: pos.elev,
-                color: startTimeColors[team.start_time] || '#999',
-                race: team.race,
-                isFavorite: isFavorite,
-            };
-        })
-        .filter(Boolean);
-    
-    // Nettoyer les anciens marqueurs
-    state.markers.forEach(marker => state.map.removeLayer(marker));
-    state.markers.clear();
-    state.elevationMarkers.length = 0;
-    
-    // Créer les nouveaux marqueurs (simple et rapide)
-    validPositions.forEach(data => {
-        const size = data.isFavorite ? 36 : 24;
-        const shape = raceSymbols[data.race] || 'circle';
-        
-        const icon = L.divIcon({
-            className: 'simple-marker',
-            html: `<div class="marker-${shape}" style="
-                width: ${size}px;
-                height: ${size}px;
-                background: ${data.color};
-                filter: drop-shadow(1px 0 0 black) 
-                        drop-shadow(-1px 0 0 black) 
-                        drop-shadow(0 1px 0 black) 
-                        drop-shadow(0 -1px 0 black);
-            "></div>`,
-            iconSize: [size, size],
-            iconAnchor: [size / 2, size / 2]
-        });
-        
-        const marker = L.marker([data.lat, data.lon], { 
-            icon,
-            zIndexOffset: data.isFavorite ? 1000 : 100,
-            interactive: false
-        }).addTo(state.map);
-        
-        state.markers.set(data.teamId, marker);
+}
+
+function updateTeamStatuses(t) {
+    state.teamDomMap.forEach((item, teamId) => {
+        if (item.classList.contains('hidden')) return;
+        const team = state.teamsMap.get(teamId);
+        const { cssStatus, label, elapsed } = getTeamStatusAtT(team, t);
+
+        const elapsedEl = item.querySelector('[data-elapsed]');
+        const statusEl  = item.querySelector('[data-status-display]');
+        if (elapsedEl) elapsedEl.textContent = elapsed;
+        if (statusEl)  {
+            statusEl.className  = `team-detail-item status status-${cssStatus}`;
+            statusEl.textContent = label;
+        }
     });
-    
-    state.elevationMarkers = validPositions
-    
+}
+
+function updateMarkers(timeIndex) {
+    const markerData = [];
+    const elevData   = [];
+
+    for (const race of state.selectedRaces) {
+        const frames = state.frames[race];
+        if (!frames || timeIndex >= frames.length) continue;
+        const frame = frames[timeIndex];
+        if (!frame) continue;
+
+        const shape = CONFIG.raceShapes[race] || 'circle';
+
+        for (const [teamId, lat, lon, dist, elev] of frame) {
+            if (!lat || !lon) continue;
+            const team = state.teamsMap.get(teamId);
+            if (!team) continue;
+
+            const isFavorite = state.favoriteTeams.has(teamId);
+            if (!isFavorite && !state.selectedStartTimes.has(team.t_start)) continue;
+
+            const color = CONFIG.startTimeColors[team.t_start] || '#999';
+
+            markerData.push({ lat, lon, color, shape, isFavorite });
+            elevData.push({ dist, elev, color, race, isFavorite });
+        }
+    }
+
+    state.canvasLayer.update(markerData);
+    state.elevationMarkers = elevData;
     updateElevationProfile();
 }
 
-// Utilitaires
+// ===== UTILS =====
 function showLoading(show) {
     const overlay = document.getElementById('loading-overlay');
-    if (show) {
-        overlay.classList.remove('hidden');
-    } else {
-        setTimeout(() => overlay.classList.add('hidden'), 300);
-    }
+    if (show) overlay.classList.remove('hidden');
+    else setTimeout(() => overlay.classList.add('hidden'), 300);
 }
 
-// Démarrage
 document.addEventListener('DOMContentLoaded', init);

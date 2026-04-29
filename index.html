@@ -106,9 +106,24 @@
             <div class="map-container">
                 <div id="map"></div>
                 <div class="map-legend">
-                    <h4>Catégories</h4>
-                    <div class="legend-items" id="legend-categories">
-                        <!-- Généré dynamiquement -->
+                    <div class="legend-grid">
+                        <div class="legend-col">
+                            <div class="legend-col-title">Courses</div>
+                            <div class="legend-item"><div class="legend-shape marker-circle"></div><span>A1</span></div>
+                            <div class="legend-item"><div class="legend-shape marker-square"></div><span>A2</span></div>
+                            <div class="legend-item"><div class="legend-shape marker-diamond"></div><span>Z1</span></div>
+                            <div class="legend-item"><div class="legend-shape marker-triangle"></div><span>Z2</span></div>
+                        </div>
+                        <div class="legend-col">
+                            <div class="legend-col-title">Départs</div>
+                            <div class="legend-wave" style="background:#02d8fd">22:00 / 03:30</div>
+                            <div class="legend-wave" style="background:#f71212">22:45 / 04:00</div>
+                            <div class="legend-wave" style="background:#f59e0b">23:30 / 04:30</div>
+                            <div class="legend-wave" style="background:#0fd420">00:15 / 05:00</div>
+                            <div class="legend-wave" style="background:#0452ce">01:00 / 06:00</div>
+                            <div class="legend-wave" style="background:#6e33f7">02:00 / 06:30</div>
+                            <div class="legend-wave" style="background:#FF1D8D">03:00</div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -130,6 +145,13 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://unpkg.com/leaflet-gpx@1.7.0/gpx.js"></script>
     <script src="https://unpkg.com/pako@2.1.0/dist/pako.min.js"></script>
+    <script>
+        const _getContext = HTMLCanvasElement.prototype.getContext;
+        HTMLCanvasElement.prototype.getContext = function(type, options) {
+            if (type === '2d') options = { ...options, willReadFrequently: true };
+            return _getContext.call(this, type, options);
+        };
+    </script>
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     <script src="app.js"></script>
 </body>
