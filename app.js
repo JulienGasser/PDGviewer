@@ -177,7 +177,6 @@ async function init() {
         buildRaceFilters();
         buildStartTimeFilters();
         buildTeamsList();
-        buildCategoryLegend();
         attachEventListeners();
         updateVisualization();
         showLoading(false);
@@ -195,6 +194,10 @@ async function loadData() {
         fetch('data/traceZ.gpx'),
     ]);
 
+    if (!teamsResp.ok) throw new Error(`data/teamsPDG.json → ${teamsResp.status}`);
+    if (!elevResp.ok)  throw new Error(`data/profil_traceZ.json → ${elevResp.status}`);
+    if (!gpxResp.ok)   throw new Error(`data/traceZ.gpx → ${gpxResp.status}`);
+
     state.teams         = await teamsResp.json();
     state.teamsMap      = new Map(state.teams.map(t => [t.id, t]));
     state.elevationProfile = await elevResp.json();
@@ -203,8 +206,10 @@ async function loadData() {
     // All start times selected by default
     state.teams.forEach(t => state.selectedStartTimes.add(t.t_start));
 
-    const saved = localStorage.getItem('pdg_favorites');
-    if (saved) state.favoriteTeams = new Set(JSON.parse(saved));
+    try {
+        const saved = localStorage.getItem('pdg_favorites');
+        if (saved) state.favoriteTeams = new Set(JSON.parse(saved));
+    } catch { /* localStorage corrompu — on repart avec des favoris vides */ }
 
     await loadRacePositions([...state.selectedRaces]);
     console.log(`Chargé: ${state.teams.length} équipes`);
@@ -222,6 +227,8 @@ async function loadRacePositions(races) {
             state.frames[race]   = parsed.frames;
             state.raceMeta[race] = parsed.meta;
             state.loadedRaces.add(race);
+            if (parsed.meta.interval !== CONFIG.dataInterval)
+                alert(`Error: Time interval for race ${race} is ${parsed.meta.interval} but should be ${CONFIG.dataInterval}`);
             console.log(`Positions ${race}: ${parsed.frames.length} frames`);
         } catch (e) {
             console.warn(`positions${race}.json.gz introuvable:`, e);
@@ -251,64 +258,61 @@ function initMap() {
 }
 
 // ===== ELEVATION PROFILE =====
+// Trace layout (fixed slots): 0 = elevation profile, 1-4 = A1/A2/Z1/Z2, 5 = favorites
+const ELEV_RACE_ORDER   = ['A1', 'A2', 'Z1', 'Z2'];
+const ELEV_RACE_SYMBOLS = { 'A1': 'circle', 'A2': 'square', 'Z1': 'diamond', 'Z2': 'triangle-up' };
+
 function updateElevationProfile() {
     const profileData = state.elevationProfile;
     if (!profileData.length) return;
 
-    const raceSymbols = { 'A1': 'circle', 'A2': 'square', 'Z1': 'diamond', 'Z2': 'triangle-up' };
+    const el = document.getElementById('elevation-profile');
 
-    const traceProfile = {
-        x: profileData.map(p => p.dist),
-        y: profileData.map(p => p.alt),
-        type: 'scatter', mode: 'lines', fill: 'tozeroy',
-        fillcolor: 'url(#elevationGradient)',
-        line: { color: 'rgb(220,38,38)', width: 2, shape: 'spline' },
-        hoverinfo: 'skip'
-    };
-
-    const byRace = {};
+    const byRace = { A1: [], A2: [], Z1: [], Z2: [] };
     const favs   = [];
     for (const d of state.elevationMarkers) {
         if (d.isFavorite) { favs.push(d); continue; }
-        if (!byRace[d.race]) byRace[d.race] = [];
-        byRace[d.race].push(d);
+        if (byRace[d.race]) byRace[d.race].push(d);
     }
 
-    const markerTraces = Object.entries(byRace).map(([race, data]) => ({
-        x: data.map(d => d.dist),
-        y: data.map(d => d.elev),
-        type: 'scattergl', mode: 'markers',
-        marker: { size: 10, color: data.map(d => d.color), symbol: raceSymbols[race] || 'circle', line: { color: 'black', width: 1 } },
-        hoverinfo: 'skip', showlegend: false
-    }));
-
-    if (favs.length) {
-        markerTraces.push({
+    if (!el._elevReady) {
+        const traceProfile = {
+            x: profileData.map(p => p.dist), y: profileData.map(p => p.alt),
+            type: 'scatter', mode: 'lines', fill: 'tozeroy',
+            fillcolor: 'rgba(220,38,38,0.25)',
+            line: { color: 'rgb(220,38,38)', width: 2, shape: 'spline' },
+            hoverinfo: 'skip'
+        };
+        const raceTraces = ELEV_RACE_ORDER.map(race => ({
+            x: byRace[race].map(d => d.dist), y: byRace[race].map(d => d.elev),
+            type: 'scattergl', mode: 'markers',
+            marker: { size: 10, color: byRace[race].map(d => d.color), symbol: ELEV_RACE_SYMBOLS[race], line: { color: 'black', width: 1 } },
+            hoverinfo: 'skip', showlegend: false
+        }));
+        const favTrace = {
             x: favs.map(d => d.dist), y: favs.map(d => d.elev),
             type: 'scattergl', mode: 'markers',
             marker: { size: 14, color: '#fbbf24', symbol: 'star' },
             hoverinfo: 'skip', showlegend: false
-        });
+        };
+        const layout = {
+            xaxis: { title: { text: 'Distance (km)' }, range: [0, 57], nticks: 8, showgrid: true, gridcolor: '#e5e7eb', zeroline: false, automargin: true },
+            yaxis: { title: { text: 'Altitude (m)' }, range: [1000, 4000], dtick: 500, tickmode: 'linear', showgrid: true, gridcolor: '#e5e7eb', zeroline: false, automargin: true },
+            margin: { t: 10, r: 30, l: 50, b: 40, pad: 0 },
+            autosize: true, hovermode: 'closest', showlegend: false,
+            paper_bgcolor: 'white', plot_bgcolor: 'white'
+        };
+        Plotly.react(el, [traceProfile, ...raceTraces, favTrace], layout, { responsive: true, displayModeBar: false });
+        el._elevReady = true;
+        return;
     }
 
-    const layout = {
-        xaxis: { title: { text: 'Distance (km)' }, range: [0, 57], nticks: 8, showgrid: true, gridcolor: '#e5e7eb', zeroline: false, automargin: true },
-        yaxis: { title: { text: 'Altitude (m)' }, range: [1000, 4000], dtick: 500, tickmode: 'linear', showgrid: true, gridcolor: '#e5e7eb', zeroline: false, automargin: true },
-        margin: { t: 10, r: 30, l: 50, b: 40, pad: 0 },
-        autosize: true, hovermode: 'closest', showlegend: false,
-        paper_bgcolor: 'white', plot_bgcolor: 'white'
-    };
-
-    Plotly.react('elevation-profile', [traceProfile, ...markerTraces], layout, { responsive: true, displayModeBar: false });
-    ensureElevationGradient('elevation-profile');
-}
-
-function ensureElevationGradient(id) {
-    document.getElementById(id).querySelectorAll('svg.main-svg').forEach(svg => {
-        if (!svg.querySelector('#elevationGradient')) {
-            svg.insertAdjacentHTML('afterbegin', `<defs><linearGradient id="elevationGradient" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="rgb(220,38,38)" stop-opacity="0.5"/><stop offset="100%" stop-color="rgb(220,38,38)" stop-opacity="0"/></linearGradient></defs>`);
-        }
-    });
+    // Subsequent frames: restyle only marker traces (indices 1–5), profile stays untouched
+    Plotly.restyle(el, {
+        x:             [...ELEV_RACE_ORDER.map(r => byRace[r].map(d => d.dist)),   favs.map(d => d.dist)],
+        y:             [...ELEV_RACE_ORDER.map(r => byRace[r].map(d => d.elev)),   favs.map(d => d.elev)],
+        'marker.color':[...ELEV_RACE_ORDER.map(r => byRace[r].map(d => d.color)), favs.map(() => '#fbbf24')]
+    }, [1, 2, 3, 4, 5]);
 }
 
 // ===== FILTERS =====
@@ -381,16 +385,16 @@ function buildTeamsList() {
         div.dataset.tStart = team.t_start;
         div.innerHTML = `
           <div class="team-aside">
-              <div class="team-rank">${team.rank === 0 ? '-' : team.rank}</div>
-              <div class="team-race">${team.race}</div>
+              <div class="team-rank"></div>
+              <div class="team-race"></div>
           </div>
           <div class="team-content">
               <div class="team-identity">
-                  <span class="team-bib bib-${bibThousand}">${team.bib}</span>
-                  <span class="team-name">${team.name}</span>
+                  <span class="team-bib bib-${bibThousand}"></span>
+                  <span class="team-name"></span>
               </div>
               <div class="team-details">
-                  <span class="team-detail-item team-category">${team.category}</span>
+                  <span class="team-detail-item team-category"></span>
                   <span class="team-detail-item">🕐 ${tToDisplay(team.t_start)}</span>
                   <span class="team-detail-item" data-time-display>
                       <span class="team-flag"></span>
@@ -401,7 +405,14 @@ function buildTeamsList() {
           </div>
           <button class="favorite-btn ${state.favoriteTeams.has(team.id) ? 'active' : ''}" data-team-id="${team.id}">★</button>
         `;
+        div.querySelector('.team-rank').textContent     = team.rank === 0 ? '-' : team.rank;
+        div.querySelector('.team-race').textContent     = team.race;
+        div.querySelector('.team-bib').textContent      = team.bib;
+        div.querySelector('.team-name').textContent     = team.name;
+        div.querySelector('.team-category').textContent = team.category;
 
+        div._elapsedEl = div.querySelector('[data-elapsed]');
+        div._statusEl  = div.querySelector('[data-status-display]');
         div.querySelector('.favorite-btn').addEventListener('click', e => {
             e.stopPropagation();
             toggleFavorite(team.id);
@@ -423,10 +434,6 @@ function toggleFavorite(teamId) {
     const btn = document.querySelector(`.favorite-btn[data-team-id="${teamId}"]`);
     if (btn) btn.classList.toggle('active', state.favoriteTeams.has(teamId));
     updateMarkers(state.currentT);
-}
-
-function buildCategoryLegend() {
-    // Everything in the HTML
 }
 
 // ===== FILTERING =====
@@ -489,20 +496,48 @@ function attachEventListeners() {
 function togglePlayback() {
     state.isPlaying = !state.isPlaying;
     document.getElementById('play-pause').classList.toggle('playing', state.isPlaying);
-    if (state.isPlaying) playbackLoop();
+    if (state.isPlaying) {
+        state._raf = { lastTs: null, lastStatusTs: null, step: 1 };
+        requestAnimationFrame(playbackLoop);
+    }
 }
 
-function playbackLoop() {
+function playbackLoop(ts) {
     if (!state.isPlaying) return;
-    if (state.currentT >= CONFIG.T_MAX) {
-        state.currentT = CONFIG.T_MAX;
-        togglePlayback();
+    const raf = state._raf;
+    if (raf.lastTs === null) {
+        raf.lastTs = ts;
+        raf.lastStatusTs = ts;
+        requestAnimationFrame(playbackLoop);
         return;
     }
-    state.currentT = Math.min(state.currentT + state.playbackSpeed, CONFIG.T_MAX);
-    document.getElementById('time-slider').value = state.currentT;
-    updateVisualization();
-    setTimeout(playbackLoop, 1000);
+
+    const elapsed  = ts - raf.lastTs;
+    const targetMs = (1000 / state.playbackSpeed) * raf.step;
+    if (elapsed >= targetMs) {
+        const ratio = elapsed / (1000 / state.playbackSpeed);
+        if (ratio > 2)                        raf.step = Math.min(raf.step * 2, 32);
+        else if (ratio < 1.5 && raf.step > 1) raf.step >>= 1;
+
+        state.currentT = Math.min(state.currentT + raf.step, CONFIG.T_MAX);
+        raf.lastTs = ts;
+
+        const slider = document.getElementById('time-slider');
+        slider.value = state.currentT;
+        document.getElementById('time-display').textContent = tToDisplay(state.currentT * CONFIG.dataInterval);
+        const pct = (state.currentT / parseInt(slider.max)) * 100;
+        slider.style.background = `linear-gradient(to right, var(--color-primary) ${pct}%, #e5e7eb ${pct}%)`;
+        updateMarkers(state.currentT);
+
+        if (state.currentT >= CONFIG.T_MAX) { togglePlayback(); return; }
+    }
+
+    if (ts - raf.lastStatusTs >= 1000) {
+        updateTeamStatuses(state.currentT * CONFIG.dataInterval);
+        raf.lastStatusTs = ts;
+    }
+
+    requestAnimationFrame(playbackLoop);
 }
 
 // ===== VISUALIZATION =====
@@ -536,13 +571,9 @@ function updateTeamStatuses(t) {
         const team = state.teamsMap.get(teamId);
         const { cssStatus, label, elapsed } = getTeamStatusAtT(team, t);
 
-        const elapsedEl = item.querySelector('[data-elapsed]');
-        const statusEl  = item.querySelector('[data-status-display]');
-        if (elapsedEl) elapsedEl.textContent = elapsed;
-        if (statusEl)  {
-            statusEl.className  = `team-detail-item status status-${cssStatus}`;
-            statusEl.textContent = label;
-        }
+        item._elapsedEl.textContent = elapsed;
+        item._statusEl.className    = `team-detail-item status status-${cssStatus}`;
+        item._statusEl.textContent  = label;
     });
 }
 

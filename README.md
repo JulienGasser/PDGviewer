@@ -14,7 +14,7 @@ An interactive web app to visualize team positions during the [Patrouille des Gl
 
 The app reads files from the `data/` folder. All times use **t**, an integer number of minutes elapsed since 22:00 on race night (e.g. `t=135` means 00:15, `t=330` means 03:30).
 
-### `data/teams.json`
+### `data/teamsPDG.json`
 
 One file, all races. Array of team objects:
 
@@ -30,7 +30,8 @@ One file, all races. Array of team objects:
     "t_start": 45,
     "t_end": 780,
     "status": "Finished",
-    "time": "12:45:00"
+    "time": "12:45:00",
+    "start_time": "22:45"
   }
 ]
 ```
@@ -41,6 +42,7 @@ One file, all races. Array of team objects:
 | `t_end` | int \| null | Minutes from 22:00 when the team finishes/stops (`null` if DNF/still running) |
 | `status` | string | Final status: `Finished`, `DidNotFinish`, `Disqualified` |
 | `time` | string | Final race time `HH:MM:SS`, shown once `t >= t_end` |
+| `start_time` | string | Wall-clock start time `HH:MM` (redundant with `t_start`, not read by the app) |
 
 ### `data/positions<RACE>.json.gz`
 
@@ -59,13 +61,13 @@ One gzip-compressed file per race (`positionsZ1.json.gz`, `positionsZ2.json.gz`,
 
 `frames[i]` contains all team positions at `t = i × interval` minutes. Each entry is a compact array `[team_id, latitude, longitude, distance_km, elevation_m]`. The `distance` field must already include any route offset (e.g. the +28.39 km for A-race teams on the combined profile).
 
-### `data/profil_traceZ.json`
+### `data/profil_traceZ.json` / `data/profil_traceA.json`
 
-Elevation profile as an array of `{dist, alt}` points used to draw the background chart.
+Elevation profile as an array of `{dist, alt}` points used to draw the background chart. The A-race file exists in the repo but is not yet loaded by the app (A-race support is planned).
 
-### `data/traceZ.gpx`
+### `data/traceZ.gpx` / `data/traceA.gpx`
 
-GPX file of the race route, displayed as a polyline on the map.
+GPX file of the race route, displayed as a polyline on the map. The A-race file exists in the repo but is not yet loaded by the app.
 
 ## Configuration
 

@@ -4,7 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Patrouille des Glaciers - Visualisation</title>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="anonymous" />
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -142,9 +143,12 @@
         </div>
     </div>
 
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="https://unpkg.com/leaflet-gpx@1.7.0/gpx.js"></script>
-    <script src="https://unpkg.com/pako@2.1.0/dist/pako.min.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+            integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/leaflet-gpx@1.7.0/gpx.js"
+            integrity="sha256-mKU5kXr4zrRn2KJJy9Nt9ON3XhvWPthg7YG4Rpx7b7A=" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/pako@2.1.0/dist/pako.min.js"
+            integrity="sha256-7eJpOkpqUSa501ZpBis1jsq2rnubhqHPMC/rRahRSQc=" crossorigin="anonymous"></script>
     <script>
         const _getContext = HTMLCanvasElement.prototype.getContext;
         HTMLCanvasElement.prototype.getContext = function(type, options) {
@@ -152,7 +156,8 @@
             return _getContext.call(this, type, options);
         };
     </script>
-    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"
+            integrity="sha256-f0kw66j4VB2+wo3KW9X3h/ju8c3gNprJZXtwvtIws+A=" crossorigin="anonymous"></script>
     <script src="app.js"></script>
 </body>
 </html>

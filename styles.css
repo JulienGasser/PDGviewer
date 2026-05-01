@@ -10,13 +10,6 @@
     --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.1);
     --shadow-lg: 0 10px 25px rgba(0, 0, 0, 0.15);
     
-    /* Couleurs par heure de départ */
-    --start-2000: #ef4444;
-    --start-2045: #f59e0b;
-    --start-2130: #10b981;
-    --start-2215: #3b82f6;
-    --start-2300: #8b5cf6;
-    --start-2345: #ec4899;
 }
 
 * {
@@ -136,11 +129,6 @@ body {
     background: var(--wave-color, var(--color-accent));
     color: white;
     border-color: var(--wave-color, var(--color-accent));
-}
-
-.search-section {
-    padding: 16px 20px;
-    border-bottom: 1px solid var(--color-border);
 }
 
 #team-search {
@@ -294,9 +282,6 @@ body {
 }
 
 .status-not-started { background: #e5e7eb; color: #6b7280; }
-.status-running { background: #dbeafe; color: #1e40af; }
-.status-finished { background: #d1fae5; color: #065f46; }
-.status-finished2 { background: #fef3c7; color: #92400e; }
 
 .status-Disqualified { background: #e5e7eb; color: #6b7280; }
 .status-DidNotFinish { background: #dbeafe; color: #1e40af; }
@@ -682,7 +667,6 @@ body {
 
 .marker-pentagon {
     display: block;
-    clip-path: polygon(50% 0%, 0% 100%, 100% 100%);
     border: 1.5px solid #000000;
     clip-path: polygon(50% 0%, 100% 38%, 82% 100%, 18% 100%, 0% 38%);
 }
